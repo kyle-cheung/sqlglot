@@ -1,6 +1,6 @@
 import unittest
 
-from sqlglot.dialects import BigQuery
+from sqlglot.dialects import BigQuery, Snowflake
 from sqlglot.errors import TokenError
 from sqlglot.tokens import Tokenizer, TokenType
 
@@ -211,6 +211,43 @@ x"""
                 (TokenType.STRING, ") }}"),
             ],
         )
+
+    def test_snowflake_stage_paths(self):
+        tokenizer = Snowflake.Tokenizer()
+
+        for sql, token_type, text in (
+            ("SELECT $1 FROM @s/a--b", TokenType.STAGE_PATH, "@s/a--b"),
+            ("SELECT $1 FROM @s/a/*b", TokenType.STAGE_PATH, "@s/a/*b"),
+            ("COPY INTO t FROM file:///tmp/a--b", TokenType.URI_START, "file:///tmp/a--b"),
+        ):
+            with self.subTest(sql):
+                tokens = tokenizer.tokenize(sql)
+                token = tokens[-1]
+                self.assertEqual((token.token_type, token.text), (token_type, text))
+                self.assertEqual((token.start, token.end), (len(sql) - len(text), len(sql) - 1))
+                self.assertFalse(any(t.comments for t in tokens))
+
+        token = tokenizer.tokenize("SELECT $1 FROM @s/a -- note")[-1]
+        self.assertEqual(
+            (token.token_type, token.text, token.comments),
+            (TokenType.STAGE_PATH, "@s/a", [" note"]),
+        )
+
+        tokens = tokenizer.tokenize('PUT file://a"b.csv @stg; SELECT 1 -- "')
+        self.assertEqual(
+            [(t.token_type, t.text) for t in tokens[1:4]],
+            [
+                (TokenType.URI_START, 'file://a"b.csv'),
+                (TokenType.STAGE_PATH, "@stg"),
+                (TokenType.SEMICOLON, ";"),
+            ],
+        )
+        self.assertEqual(tokens[-1].comments, [' "'])
+
+        tokens = tokenizer.tokenize('LIST @"a\nb"/x; SELECT 1')
+        self.assertEqual([(t.line, t.col) for t in tokens[2:]], [(2, 5), (2, 12), (2, 14)])
+
+        self.assertEqual(tokenizer.tokenize("SELECT @")[-1].token_type, TokenType.PARAMETER)
 
     def test_partial_token_list(self):
         tokenizer = Tokenizer()
